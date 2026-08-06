@@ -16,12 +16,12 @@ func read(c *sync.Cond, name string){
 		c.Wait()
 	}
 	time.Sleep(2 * time.Second)
-	fmt.Printf("%s has started reading", name)
+	fmt.Printf("%s has finished reading\n", name)
 	c.L.Unlock()
 }
 
 func write(c *sync.Cond, name string){
-	fmt.Printf("writing process has began: %s", name)
+	fmt.Printf("writing process has began: %s\n", name)
 
 	c.L.Lock()
 	time.Sleep(3 * time.Second)
