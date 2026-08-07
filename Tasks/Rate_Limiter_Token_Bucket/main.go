@@ -109,19 +109,62 @@ func (n *Node) RefilBuck(ctx context.Context, interval time.Duration, tokenRefil
 	}
 }
 
-func NewNode(bucket *TokenBucket, maxCapacity int, client *http.Client) Node {
+func NewNode(maxCapacity int) Node {
 	buck := NewTokenBucket(maxCapacity)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{}))
 	return Node{
 		tokenBucket: &buck,
-		client: http.DefaultClient,
+		client: &http.Client{
+			Timeout: 10 * time.Second,	
+		},
 		logger: logger,
 	}
 }
 
 func main() {
-	requests := []string {
-		"https://google.com",
-		"https://",
+	
+	node := NewNode(3)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go node.RefilBuck(ctx, 700 * time.Millisecond, 1)
+
+	testURLs := []string{
+		"https://httpbin.org/get",
+		"https://jsonplaceholder.typicode.com/posts/1",
+		"https://httpbin.org/delay/2",
+		"https://httpbin.org/get",
+		"https://httpbin.org/status/429",
 	}
+
+	var wg sync.WaitGroup
+
+	// Fire 10 concurrent requests to exhaust the bucket immediately
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		id := i + 1
+		url := testURLs[i%len(testURLs)]
+
+		go func(reqID int, reqURL string) {
+			defer wg.Done()
+
+			// Create a 3-second context per request
+			reqCtx, reqCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer reqCancel()
+
+			start := time.Now()
+			fmt.Printf("[%s] Req #%d requesting token for %s...\n", start.Format("15:04:05.000"), reqID, reqURL)
+
+			err := node.DoReq(reqCtx, reqURL)
+			elapsed := time.Since(start)
+
+			if err != nil {
+				fmt.Printf("[%s] Req #%d FAILED after %v: %v\n", time.Now().Format("15:04:05.000"), reqID, elapsed, err)
+			} else {
+				fmt.Printf("[%s] Req #%d SUCCESS after %v\n", time.Now().Format("15:04:05.000"), reqID, elapsed)
+			}
+		}(id, url)
+	}
+
+	wg.Wait()
 }
