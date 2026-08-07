@@ -35,14 +35,14 @@ func NewTokenBucket(maxcapacity int) TokenBucket{
 
 func (n *Node) acquireToken(ctx context.Context) (error) {
 
-	n.tokenBucket.mu.Lock()
-	defer n.tokenBucket.mu.Unlock()
+	n.tokenBucket.cond.L.Lock()
+	defer n.tokenBucket.cond.L.Unlock()
 
 	//create an after ctx func that will trigger a wake up to all other goroutines to check for ctx.Err
 	stopCtx := context.AfterFunc(ctx, func() {
-		n.tokenBucket.mu.Lock()
+		n.tokenBucket.cond.L.Lock()
 		n.tokenBucket.cond.Broadcast()
-		n.tokenBucket.mu.Unlock()
+		n.tokenBucket.cond.L.Unlock()
 	})
 	defer stopCtx()
 
@@ -98,13 +98,13 @@ func (n *Node) RefilBuck(ctx context.Context, interval time.Duration, tokenRefil
 			return fmt.Errorf("context already done")
 
 		case <-ticker.C:
-			n.tokenBucket.mu.Lock()
+			n.tokenBucket.cond.L.Lock()
 			if n.tokenBucket.rem < n.tokenBucket.maxCapacity {
 				n.tokenBucket.rem = min(n.tokenBucket.maxCapacity, (n.tokenBucket.rem + tokenRefil))
 				//unblock other goroutines awaiting the response
 				n.tokenBucket.cond.Broadcast()
 			}
-			n.tokenBucket.mu.Unlock()
+			n.tokenBucket.cond.L.Unlock()
 		}	
 	}
 }
@@ -127,7 +127,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go node.RefilBuck(ctx, 700 * time.Millisecond, 1)
+	go node.RefilBuck(ctx, 500 * time.Millisecond, 1)
 
 	testURLs := []string{
 		"https://httpbin.org/get",
