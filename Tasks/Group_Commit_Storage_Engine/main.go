@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
+	"time"
 )
 
 type GroupCommitNode struct {
@@ -82,6 +85,35 @@ func NewNode(name string, proto, addr string, logger *slog.Logger) (*GroupCommit
 
 	return &node, nil
 } 
+
+func (n *GroupCommitNode) BatchWrite(ctx context.Context, rec <-chan []byte, interval time.Duration)(error) {
+	ticker := time.NewTicker(interval)
+
+	//destination file creation
+	fd, err := os.OpenFile("sample.txt", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		n.logger.ErrorContext(ctx, "open file opertion failed", "err", err.Error())
+		return fmt.Errorf("error while creating sample file")
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context done")
+		case <-ticker.C:
+			n.cond.L.Lock()
+		 for data := range rec {
+			//perform a write operation to disk using fsync	
+			_,err := fd.Write(data)
+			if err != nil {
+				n.logger.ErrorContext(ctx, "writing to file has failed", "err", err.Error())
+				return fmt.Errorf("error while writing to sample file")
+			}
+		 }		
+		 n.cond.Broadcast()
+		 n.cond.L.Unlock()
+		}
+	}
+}
 
 func (n *GroupCommitNode) Listen(ctx context.Context) (error) {
 	//spawn a new go routine to handle connections -> but this time create a client and attach a conn to handle those connections
