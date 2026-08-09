@@ -120,6 +120,7 @@ func (n *GroupCommitNode) BatchWrite(ctx context.Context,  interval time.Duratio
 
 func (n *GroupCommitNode) Listen(ctx context.Context) (error) {
 	//spawn a new go routine to handle connections -> but this time create a client and attach a conn to handle those connections
+	defer n.l.Close()
 	for {
 
 		if err := ctx.Err(); err != nil {
