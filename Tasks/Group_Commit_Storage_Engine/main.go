@@ -16,6 +16,7 @@ type GroupCommitNode struct {
 	buffer *bytes.Buffer
 	mu sync.Mutex
 	cond *sync.Cond
+	dataCh chan []byte
 
 	//network
 	proto string
@@ -59,6 +60,7 @@ func (c *Client) HandleConn(ctx context.Context, sendCh chan <-[]byte) (error) {
 		//block the connection until to receive a signal to resume
 		c.cond.Wait()
 
+		c.logger.InfoContext(ctx, "complete connection")
 		//so for here I don't know what will be the terminater so that I know its an EOF
 		//that will lead to a break out of loop scenario
 	}
@@ -69,6 +71,7 @@ func NewNode(name string, proto, addr string, logger *slog.Logger) (*GroupCommit
 	node := GroupCommitNode{
 		Name: name,
 		buffer: new(bytes.Buffer),	
+		dataCh: make(chan []byte),
 	}
 	node.cond = sync.NewCond(&node.mu)
 	node.logger = logger
@@ -86,7 +89,7 @@ func NewNode(name string, proto, addr string, logger *slog.Logger) (*GroupCommit
 	return &node, nil
 } 
 
-func (n *GroupCommitNode) BatchWrite(ctx context.Context, rec <-chan []byte, interval time.Duration)(error) {
+func (n *GroupCommitNode) BatchWrite(ctx context.Context,  interval time.Duration)(error) {
 	ticker := time.NewTicker(interval)
 
 	//destination file creation
@@ -101,7 +104,7 @@ func (n *GroupCommitNode) BatchWrite(ctx context.Context, rec <-chan []byte, int
 			return fmt.Errorf("context done")
 		case <-ticker.C:
 			n.cond.L.Lock()
-		 for data := range rec {
+		 for data := range n.dataCh {
 			//perform a write operation to disk using fsync	
 			_,err := fd.Write(data)
 			if err != nil {
@@ -131,12 +134,14 @@ func (n *GroupCommitNode) Listen(ctx context.Context) (error) {
 			continue
 		}
 
-		client := Client{conn: conn}
-
+		client := Client{conn: conn, logger: n.logger, cond: n.cond}
 		//establish a goroutine to handle client connections
 		go func (ctx context.Context, client Client){
 			//create a client handler
-
+			if err := client.HandleConn(ctx, n.dataCh); err != nil {
+				n.logger.ErrorContext(ctx, "error while handling client conn", "err", err.Error())
+				return
+			}
 		}(ctx, client)
 	}
 }
