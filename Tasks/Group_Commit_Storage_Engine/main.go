@@ -139,10 +139,32 @@ func (n *GroupCommitNode) Listen(ctx context.Context) (error) {
 		//establish a goroutine to handle client connections
 		go func (ctx context.Context, client Client){
 			//create a client handler
-			if err := client.HandleConn(ctx, n.dataCh); err != nil {
+			timeOutCtx, cancel := context.WithTimeout(ctx, 15 * time.Second)
+			defer cancel()
+			if err := client.HandleConn(timeOutCtx, n.dataCh); err != nil {
 				n.logger.ErrorContext(ctx, "error while handling client conn", "err", err.Error())
 				return
 			}
 		}(ctx, client)
+	}
+}
+
+func main(){
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{}))
+	node, err:= NewNode("group_commit_node", "tcp", "0.0.0.0:3224", logger)
+	ctx := context.Background()
+
+
+	if err != nil {
+		fmt.Printf("error while inializing node: err: %s", err.Error())
+		os.Exit(1)
+	}
+
+	go node.BatchWrite(ctx, 5 * time.Second)
+
+	if err := node.Listen(ctx); err != nil {
+		logger.ErrorContext(ctx, "node error while listening", "err", err.Error())
+		os.Exit(1)
 	}
 }
