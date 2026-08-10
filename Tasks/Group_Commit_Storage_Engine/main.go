@@ -189,6 +189,11 @@ func (n *GroupCommitNode) flushWrite(fd *os.File, ctx context.Context) (error) {
 		return err
 	}
 
+	err := fd.Sync()
+	if err != nil {
+		n.logger.ErrorContext(ctx, "error while syncing file content from in-memory to disk", "err", err.Error())
+		return err
+	}
 
 	//update the flushedSeq field to reflect the last point of flushedSeq
 	//also broadcast to other listeninig goroutines
