@@ -11,12 +11,19 @@ import (
 	"time"
 )
 
+type LogEntry struct {
+	data []byte 
+	seq uint64
+}
+
 type GroupCommitNode struct {
 	Name string
 	buffer *bytes.Buffer
 	mu sync.Mutex
 	cond *sync.Cond
-	dataCh chan []byte
+
+	nextSeq uint64
+	flushedSeq uint64
 
 	//network
 	proto string
@@ -31,39 +38,39 @@ type GroupCommitNode struct {
 type Client struct {
 	conn net.Conn
 	logger *slog.Logger
-	cond *sync.Cond
+	node *GroupCommitNode
 }
 
 func (c *Client) HandleConn(ctx context.Context, sendCh chan <-[]byte) (error) {
-
 	//defer client connection closing
 	defer c.conn.Close()
-	c.cond.L.Lock()
-	defer c.cond.L.Unlock()
-	buf := new(bytes.Buffer)
+	buf := make([]byte, 1024)
 	for {
 		if err := ctx.Err(); err != nil {
 			c.logger.ErrorContext(ctx, "context done", "err", err)
 			return err
 		}
 		//@todo: I dont know if this is okay to do...
-		buf.Reset()
-		_, err := c.conn.Read(buf.AvailableBuffer())
+		n, err := c.conn.Read(buf)
 		if err != nil {
 			c.logger.ErrorContext(ctx, "error while reading conn", "err", err.Error())
 			return err
 		}
+		
+		if n == 0 {
+			continue
+		}
 
-		//send the data over the channel
-		sendCh <- buf.Bytes()
+		if err := c.node.Submit(buf[:n]); err != nil {
+			c.logger.ErrorContext(ctx, "error while node submiting data for a write:", "err", err.Error())
+			c.conn.Write([]byte("submit error\n"))
+			return err
+		}
 
-		//block the connection until to receive a signal to resume
-		c.cond.Wait()
-
-		c.logger.InfoContext(ctx, "complete connection")
-		//so for here I don't know what will be the terminater so that I know its an EOF
-		//that will lead to a break out of loop scenario
+		//acknowldge that you have received the data
+		c.conn.Write([]byte("ACK\n"))
 	}
+
 }
 
 
@@ -71,7 +78,6 @@ func NewNode(name string, proto, addr string, logger *slog.Logger) (*GroupCommit
 	node := GroupCommitNode{
 		Name: name,
 		buffer: new(bytes.Buffer),	
-		dataCh: make(chan []byte),
 	}
 	node.cond = sync.NewCond(&node.mu)
 	node.logger = logger
