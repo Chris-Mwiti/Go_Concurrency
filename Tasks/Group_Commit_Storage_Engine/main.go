@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -18,7 +20,7 @@ type LogEntry struct {
 
 type GroupCommitNode struct {
 	Name string
-	buffer *bytes.Buffer
+	buffer []LogEntry
 	mu sync.Mutex
 	cond *sync.Cond
 
@@ -41,7 +43,7 @@ type Client struct {
 	node *GroupCommitNode
 }
 
-func (c *Client) HandleConn(ctx context.Context, sendCh chan <-[]byte) (error) {
+func (c *Client) HandleConn(ctx context.Context) (error) {
 	//defer client connection closing
 	defer c.conn.Close()
 	buf := make([]byte, 1024)
@@ -50,10 +52,12 @@ func (c *Client) HandleConn(ctx context.Context, sendCh chan <-[]byte) (error) {
 			c.logger.ErrorContext(ctx, "context done", "err", err)
 			return err
 		}
-		//@todo: I dont know if this is okay to do...
 		n, err := c.conn.Read(buf)
 		if err != nil {
 			c.logger.ErrorContext(ctx, "error while reading conn", "err", err.Error())
+			if errors.Is(err, io.EOF){
+				return fmt.Errorf("EOF error")
+			}
 			return err
 		}
 		
@@ -61,7 +65,7 @@ func (c *Client) HandleConn(ctx context.Context, sendCh chan <-[]byte) (error) {
 			continue
 		}
 
-		if err := c.node.Submit(buf[:n]); err != nil {
+		if err := c.node.Submit(ctx,buf[:n]); err != nil {
 			c.logger.ErrorContext(ctx, "error while node submiting data for a write:", "err", err.Error())
 			c.conn.Write([]byte("submit error\n"))
 			return err
@@ -73,11 +77,45 @@ func (c *Client) HandleConn(ctx context.Context, sendCh chan <-[]byte) (error) {
 
 }
 
+func (n *GroupCommitNode) Submit(ctx context.Context, data []byte) error {
+	n.mu.Lock()
+	n.nextSeq++
+	mySeq := n.nextSeq
+
+	//copy the data to avoid mutating the buffer	
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	n.mu.Unlock()
+
+	//add the data to the node buffer
+	n.buffer = append(n.buffer, LogEntry{data: buf, seq: mySeq})
+
+	//this function is run by a separate goroutine
+	stop := context.AfterFunc(ctx, func() {
+		n.cond.L.Lock()
+		n.cond.Broadcast()
+		n.cond.L.Unlock()
+	})
+	defer stop()
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for n.flushedSeq < mySeq {
+		if err := ctx.Err(); err != nil {
+			n.logger.ErrorContext(ctx, "context done", "err", err.Error())
+			return err
+		}
+		n.cond.Wait()
+	}
+
+	return nil
+}
+
 
 func NewNode(name string, proto, addr string, logger *slog.Logger) (*GroupCommitNode, error){
 	node := GroupCommitNode{
 		Name: name,
-		buffer: new(bytes.Buffer),	
+		buffer: make([]LogEntry, 0),	
 	}
 	node.cond = sync.NewCond(&node.mu)
 	node.logger = logger
@@ -97,31 +135,45 @@ func NewNode(name string, proto, addr string, logger *slog.Logger) (*GroupCommit
 
 func (n *GroupCommitNode) BatchWrite(ctx context.Context,  interval time.Duration)(error) {
 	ticker := time.NewTicker(interval)
-
+	defer ticker.Stop()
 	//destination file creation
 	fd, err := os.OpenFile("sample.txt", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	defer fd.Close()
+
 	if err != nil {
 		n.logger.ErrorContext(ctx, "open file opertion failed", "err", err.Error())
 		return fmt.Errorf("error while creating sample file")
 	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("context done")
 		case <-ticker.C:
-			n.cond.L.Lock()
-		 for data := range n.dataCh {
-			//perform a write operation to disk using fsync	
-			_,err := fd.Write(data)
+			err := n.flushWrite(fd, ctx)
 			if err != nil {
-				n.logger.ErrorContext(ctx, "writing to file has failed", "err", err.Error())
-				return fmt.Errorf("error while writing to sample file")
+				n.logger.ErrorContext(ctx, "error while flush writing to the disk", "err", err.Error())
 			}
-		 }		
-		 n.cond.Broadcast()
-		 n.cond.L.Unlock()
 		}
 	}
+}
+
+func (n *GroupCommitNode) flushWrite(fd *os.File, ctx context.Context) (error) {
+	n.mu.Lock()
+	if len(n.buffer) == 0 {
+		n.mu.Unlock()
+		return nil
+	}
+
+	//create a copy of the pending buffer & reset the buffer
+	toFlush := n.buffer
+	n.buffer = make([]LogEntry, 0)
+	//here we get the last sequence number in order to update the flushed sequence
+	maxSeq := toFlush[len(toFlush)-1].seq
+	n.mu.Unlock()
+
+	//here we are perfoming I/O without holding any lock
+
 }
 
 func (n *GroupCommitNode) Listen(ctx context.Context) (error) {
