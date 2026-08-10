@@ -238,6 +238,16 @@ func main(){
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM) 
 	defer stop()
 
+	go func() {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Context cancelled due to signal, shutting down.")
+			// Cleanup logic here
+			node.l.Close()
+			os.Exit(0)
+		}
+	}()
+
 	if err != nil {
 		fmt.Printf("error while inializing node: err: %s", err.Error())
 		os.Exit(1)
@@ -250,4 +260,6 @@ func main(){
 		logger.ErrorContext(ctx, "node error while listening", "err", err.Error())
 		os.Exit(1)
 	}
+
+	<-ctx.Done()
 }
