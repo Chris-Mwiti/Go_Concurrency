@@ -138,12 +138,11 @@ func (n *GroupCommitNode) BatchWrite(ctx context.Context,  interval time.Duratio
 	defer ticker.Stop()
 	//destination file creation
 	fd, err := os.OpenFile("sample.txt", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
-	defer fd.Close()
-
 	if err != nil {
 		n.logger.ErrorContext(ctx, "open file opertion failed", "err", err.Error())
 		return fmt.Errorf("error while creating sample file")
 	}
+	defer fd.Close()
 
 	for {
 		select {
@@ -173,7 +172,30 @@ func (n *GroupCommitNode) flushWrite(fd *os.File, ctx context.Context) (error) {
 	n.mu.Unlock()
 
 	//here we are perfoming I/O without holding any lock
+	
+	//create a new buffer to hold the data...generally i would have flushed the data directly
+	//but appending a new line character
+	buff := new(bytes.Buffer)
+	for _, entry := range toFlush {
+		buff.Write(entry.data)
+		buff.Write([]byte("\n"))
+	}
 
+	//perform the flush sequence
+	if _, err := fd.Write(buff.Bytes()); err != nil {
+		n.logger.ErrorContext(ctx, "error while writing to disk", "err", err.Error())
+		return err
+	}
+
+
+	//update the flushedSeq field to reflect the last point of flushedSeq
+	//also broadcast to other listeninig goroutines
+	n.mu.Lock()
+	n.flushedSeq = maxSeq
+	n.cond.Broadcast()
+	n.mu.Unlock()
+
+	return nil
 }
 
 func (n *GroupCommitNode) Listen(ctx context.Context) (error) {
@@ -193,13 +215,13 @@ func (n *GroupCommitNode) Listen(ctx context.Context) (error) {
 			continue
 		}
 
-		client := Client{conn: conn, logger: n.logger, cond: n.cond}
+		client := Client{conn: conn, logger: n.logger, node: n}
 		//establish a goroutine to handle client connections
 		go func (ctx context.Context, client Client){
 			//create a client handler
 			timeOutCtx, cancel := context.WithTimeout(ctx, 15 * time.Second)
 			defer cancel()
-			if err := client.HandleConn(timeOutCtx, n.dataCh); err != nil {
+			if err := client.HandleConn(timeOutCtx); err != nil {
 				n.logger.ErrorContext(ctx, "error while handling client conn", "err", err.Error())
 				return
 			}
