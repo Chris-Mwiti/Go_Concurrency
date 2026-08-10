@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -233,8 +235,8 @@ func main(){
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{}))
 	node, err:= NewNode("group_commit_node", "tcp", "0.0.0.0:3224", logger)
-	ctx := context.Background()
-
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM) 
+	defer stop()
 
 	if err != nil {
 		fmt.Printf("error while inializing node: err: %s", err.Error())
@@ -243,6 +245,7 @@ func main(){
 
 	go node.BatchWrite(ctx, 5 * time.Second)
 
+	logger.InfoContext(ctx, "node has started listening")
 	if err := node.Listen(ctx); err != nil {
 		logger.ErrorContext(ctx, "node error while listening", "err", err.Error())
 		os.Exit(1)
