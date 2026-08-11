@@ -87,10 +87,10 @@ func (n *GroupCommitNode) Submit(ctx context.Context, data []byte) error {
 	//copy the data to avoid mutating the buffer	
 	buf := make([]byte, len(data))
 	copy(buf, data)
-	n.mu.Unlock()
 
 	//add the data to the node buffer
 	n.buffer = append(n.buffer, LogEntry{data: buf, seq: mySeq})
+	n.mu.Unlock()
 
 	//this function is run by a separate goroutine
 	stop := context.AfterFunc(ctx, func() {
@@ -154,6 +154,7 @@ func (n *GroupCommitNode) BatchWrite(ctx context.Context,  interval time.Duratio
 			err := n.flushWrite(fd, ctx)
 			if err != nil {
 				n.logger.ErrorContext(ctx, "error while flush writing to the disk", "err", err.Error())
+				return err
 			}
 		}
 	}
