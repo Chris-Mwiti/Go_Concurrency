@@ -92,7 +92,7 @@ func (n *GroupCommitNode) Submit(ctx context.Context, data []byte) error {
 	n.buffer = append(n.buffer, LogEntry{data: buf, seq: mySeq})
 	n.mu.Unlock()
 
-	//this function is run by a separate goroutine
+	//this function is run by a separate goroutine - wakes up any sleeping goroutine to check on ctx error
 	stop := context.AfterFunc(ctx, func() {
 		n.cond.L.Lock()
 		n.cond.Broadcast()
