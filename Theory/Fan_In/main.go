@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+//dummy changes for the streak commit althor planning to implement it tommorrow
+
 func main() {
 	i1 := generateWork([]int{0, 2, 6, 8})
 	i2 := generateWork([]int{1, 3, 5, 7})
